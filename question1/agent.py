@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
 from dataclasses import dataclass
+from functools import lru_cache
 
 from shared.billing import CostSession
-from shared.kb import all_articles_blob
+from shared.kb import article_ids, load_article
 from shared.llm import ChatMessage, LlmClient
 from shared.tools import format_thread, get_order, get_ticket
 
@@ -32,14 +32,34 @@ def parse_resolution(text: str) -> TicketResolution:
     )
 
 
-_FEW_SHOT = """
-Example ticket resolutions (format to copy):
+"""optimised prompt
 
-1. Unopened headphones, day 10 → {"action":"REFUND","kb_article":"returns-within-30-days"}
-2. Ebook, license shown → {"action":"SEND_ARTICLE","kb_article":"digital-license-no-refund"}
-3. Cracked custom mug → {"action":"ESCALATE_TIER2","kb_article":"custom-items-no-replace"}
-4. Cracked stock mug, day 2 → {"action":"REPLACE","kb_article":"damage-replacement-7-days"}
-"""
+Where the baseline's ~8.9k points/ticket went (T-1001):
+  * 485 output tokens x 15 = 7,275 pts: "Think step by step ... quote any article"
+    makes the model write a long reasoning trace the product never uses.
+  * 524 input tokens x 3   = 1,572 pts: random run-id, few-shot block, full
+    markdown headings, pretty-printed JSON snapshot.
+
+Fix: ask for the JSON object only (no reasoning/quoting), keep the prompt
+static + compact, and send the order snapshot as minified JSON."""
+
+_SYSTEM_HEADER = (
+    "ShopAssist Tier-1 support copilot. Pick one action per ticket, using the order "
+    "facts and the help-center article that applies.\n"
+    "Actions: REFUND, REPLACE, SEND_ARTICLE, ESCALATE_TIER2.\n"
+    'Reply with only this JSON: {"action":...,"kb_article":<article id>,'
+    '"customer_reply":<one short sentence>}'
+)
+
+
+@lru_cache
+def _compact_help_center() -> str:
+    """One line per article: `id: policy text` (id heading + markdown bold removed)."""
+    lines = []
+    for aid in article_ids():
+        body = load_article(aid).replace(f"# {aid}", "").replace("**", "")
+        lines.append(f"{aid}: {' '.join(body.split())}")
+    return "\n".join(lines)
 
 
 class SupportCopilot:
@@ -58,28 +78,11 @@ class SupportCopilot:
         ticket = get_ticket(ticket_id)
         order = get_order(ticket["order_id"])
         thread = format_thread(ticket)
-        snapshot = json.dumps(order, indent=2)
+        snapshot = json.dumps(order, separators=(",", ":"))
 
-        system = "\n\n".join(
-            [
-                f"Run id {uuid.uuid4()}",
-                "You are ShopAssist, the Tier-1 customer support copilot.",
-                _FEW_SHOT,
-                "HELP CENTER:",
-                all_articles_blob(),
-                (
-                    "Instructions: Think step by step. Write full reasoning, quote any article "
-                    "you rely on, then output JSON with action, kb_article, customer_reply."
-                ),
-            ]
-        )
-        user = "\n\n".join(
-            [
-                f"TICKET_ID: {ticket_id}",
-                f"THREAD:\n{thread}",
-                f"ORDER_SNAPSHOT:\n{snapshot}\nEND_SNAPSHOT",
-            ]
-        )
+        # Static content first (stable prefix -> cacheable once it grows past the 1024-token minimum), per-ticket content last.
+        system = f"{_SYSTEM_HEADER}\nHELP CENTER:\n{_compact_help_center()}"
+        user = f"{thread}\nORDER_SNAPSHOT:\n{snapshot}\nEND_SNAPSHOT"
         return [ChatMessage("system", system), ChatMessage("user", user)]
 
     def handle_ticket(self, ticket_id: str) -> TicketResolution:
