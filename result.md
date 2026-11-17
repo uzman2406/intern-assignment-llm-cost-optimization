@@ -1,3 +1,9 @@
+### Before the solution
+<img width="1218" height="363" alt="image" src="https://github.com/user-attachments/assets/6ed743db-af53-484a-8529-9ac4b30c24b2" />
+
+
+### After 
+
 ### Result of question1/run.py
 ```
 {
@@ -59,17 +65,20 @@ Means 1554 points per ticket which is <3000.
 Means 1373 points per ticket which is <2500.
 
 ### Final Observation 
-
+```
 # Q1 T-1001
+
 call            in_tok  cached   out_tok   in_pts  out_pts    total
 handle_ticket      330       0      46        990      690     1680
 
 # Q2 T-1002
+
 call            in_tok  cached   out_tok   in_pts  out_pts    total
 compose            262       0        39      786      585     1371
+```
 
- ```
- test_baseline_cost_is_high (both questions) asserts the baseline is expensive, so it fails by design once the agent is optimised. I added tests/test_budget.py with the real targets instead.
- ```
+
+* test_baseline_cost_is_high (both questions) asserts the baseline is expensive, so it fails by design once the agent is optimised. I added tests/test_budget.py with the real targets instead.
+
 
  
